@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "ApplyNinja",
+  "version": "2.0.0",
+  "description": "Stealthy job automation for LinkedIn, Naukri, Indeed & Glassdoor.",
+  "permissions": ["storage", "tabs", "activeTab", "scripting"],
+  "host_permissions": ["https://www.linkedin.com/*", "https://www.glassdoor.com/*", "https://www.glassdoor.co.in/*"],
+  "action": {
+    "default_popup": "index.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "assets/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.linkedin.com/*"],
+      "js": ["assets/content-script.js"]
+    },
+    {
+      "matches": ["https://www.glassdoor.com/*", "https://www.glassdoor.co.in/*"],
+      "js": ["assets/glassdoor-script.js"]
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

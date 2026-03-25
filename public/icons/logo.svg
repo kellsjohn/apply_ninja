@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none">
+  <!-- Background -->
+  <rect width="128" height="128" rx="28" fill="#0f1117"/>
+  <rect width="128" height="128" rx="28" fill="url(#bg-grad)" opacity="0.9"/>
+
+  <!-- Ninja head/mask -->
+  <circle cx="64" cy="44" r="22" fill="#1a2332"/>
+  <circle cx="64" cy="44" r="22" fill="url(#head-grad)"/>
+
+  <!-- Ninja mask band (eyes exposed) -->
+  <rect x="42" y="38" width="44" height="13" rx="6.5" fill="#0a0f1a"/>
+
+  <!-- Eyes (glowing emerald) -->
+  <ellipse cx="55" cy="44.5" rx="4" ry="3.5" fill="#10b981"/>
+  <ellipse cx="73" cy="44.5" rx="4" ry="3.5" fill="#10b981"/>
+  <ellipse cx="55" cy="44.5" rx="2" ry="2" fill="#34d399"/>
+  <ellipse cx="73" cy="44.5" rx="2" ry="2" fill="#34d399"/>
+
+  <!-- Ninja body / outfit -->
+  <path d="M40 72 Q40 62 64 60 Q88 62 88 72 L92 95 Q64 100 36 95 Z" fill="#0d1520"/>
+  <path d="M40 72 Q40 62 64 60 Q88 62 88 72 L92 95 Q64 100 36 95 Z" fill="url(#body-grad)" opacity="0.6"/>
+
+  <!-- Collar / neck wrap -->
+  <path d="M52 60 Q64 65 76 60 L78 68 Q64 74 50 68 Z" fill="#0a0f1a"/>
+
+  <!-- Checkmark / shuriken badge -->
+  <circle cx="90" cy="88" r="16" fill="#059669"/>
+  <circle cx="90" cy="88" r="16" fill="url(#badge-grad)"/>
+  <path d="M82 88 L87.5 94 L99 82" stroke="white" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Subtle shine on badge -->
+  <circle cx="85" cy="83" r="3" fill="white" opacity="0.15"/>
+
+  <defs>
+    <linearGradient id="bg-grad" x1="0" y1="0" x2="128" y2="128" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#0d1f2d"/>
+      <stop offset="100%" stop-color="#0a0f1a"/>
+    </linearGradient>
+    <linearGradient id="head-grad" x1="42" y1="22" x2="86" y2="66" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#1e3a4a"/>
+      <stop offset="100%" stop-color="#0d1520"/>
+    </linearGradient>
+    <linearGradient id="body-grad" x1="36" y1="60" x2="92" y2="100" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#047857"/>
+    </linearGradient>
+    <linearGradient id="badge-grad" x1="74" y1="72" x2="106" y2="104" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#047857"/>
+    </linearGradient>
+  </defs>
+</svg>
