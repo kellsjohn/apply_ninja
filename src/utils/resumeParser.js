@@ -168,11 +168,32 @@ export function parseResume(rawText) {
   if (pinMatch) result.pincode = pinMatch[0];
 
   // --- Total Experience ---
-  for (const p of [/(\d+(?:\.\d+)?)\+?\s*years?\s+of\s+(?:hands-on\s+|professional\s+)?experience/i, /over\s+(\d+(?:\.\d+)?)\s*years?/i, /(\d+(?:\.\d+)?)\+?\s*yrs?\s+(?:of\s+)?experience/i]) {
-    const m = rawText.match(p);
-    if (m) {
-      result.totalExp = m[1];
-      break;
+  // First try date range calculation (most accurate) — finds earliest "MM/YYYY - Present" entry
+  let expFound = false;
+  const dateRangePattern = /(\d{1,2})[\/\-](\d{4})\s*[-–—to]+\s*(present|current|now|till date)/gi;
+  let earliestDate = null;
+  let match;
+  while ((match = dateRangePattern.exec(rawText)) !== null) {
+    const month = parseInt(match[1]) - 1;
+    const year = parseInt(match[2]);
+    const date = new Date(year, month);
+    if (!earliestDate || date < earliestDate) earliestDate = date;
+  }
+  if (earliestDate) {
+    const now = new Date();
+    const diffMs = now - earliestDate;
+    const years = diffMs / (1000 * 60 * 60 * 24 * 365.25);
+    result.totalExp = String(Math.floor(years));
+    expFound = true;
+  }
+  // Fallback: explicit "X years of experience" text in resume
+  if (!expFound) {
+    for (const p of [/(\d+(?:\.\d+)?)\+?\s*years?\s+of\s+(?:hands-on\s+|professional\s+)?experience/i, /over\s+(\d+(?:\.\d+)?)\s*years?/i, /(\d+(?:\.\d+)?)\+?\s*yrs?\s+(?:of\s+)?experience/i]) {
+      const m = rawText.match(p);
+      if (m) {
+        result.totalExp = m[1];
+        break;
+      }
     }
   }
 
@@ -196,6 +217,86 @@ export function parseResume(rawText) {
   // --- Summary ---
   const summaryMatch = rawText.match(/SUMMARY\s*\n?\s*([^\n]{80,600})/i);
   if (summaryMatch) result.summary = summaryMatch[1].trim();
+
+  // --- Skills ---
+  const KNOWN_SKILLS = [
+    'vue',
+    'vue.js',
+    'vuejs',
+    'react',
+    'react.js',
+    'reactjs',
+    'angular',
+    'svelte',
+    'javascript',
+    'typescript',
+    'node.js',
+    'nodejs',
+    'express',
+    'express.js',
+    'html',
+    'css',
+    'tailwind',
+    'sass',
+    'scss',
+    'bootstrap',
+    'postgresql',
+    'postgres',
+    'mysql',
+    'mongodb',
+    'sqlite',
+    'redis',
+    'elasticsearch',
+    'sql',
+    'nosql',
+    'graphql',
+    'rest api',
+    'restful',
+    'python',
+    'django',
+    'flask',
+    'java',
+    'spring',
+    'php',
+    'laravel',
+    'docker',
+    'kubernetes',
+    'aws',
+    'gcp',
+    'azure',
+    'git',
+    'github',
+    'gitlab',
+    'vite',
+    'webpack',
+    'jest',
+    'vitest',
+    'cypress',
+    'playwright',
+    'pinia',
+    'vuex',
+    'redux',
+    'zustand',
+    'jwt',
+    'oauth',
+    'socket.io',
+    'websocket',
+    'react native',
+    'flutter',
+    'swift',
+    'kotlin',
+    'linux',
+    'bash',
+    'ci/cd',
+    'jenkins',
+    'github actions',
+    'figma',
+    'photoshop',
+    'illustrator',
+  ];
+  const rawLower = rawText.toLowerCase();
+  const foundSkills = KNOWN_SKILLS.filter((s) => rawLower.includes(s.toLowerCase()));
+  if (foundSkills.length > 0) result.skills = foundSkills.join(', ');
 
   return result;
 }

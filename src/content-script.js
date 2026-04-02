@@ -59,14 +59,19 @@ let delayBetweenApps = 3000;
 let FILTERS = { companyBlacklist: [], titleBlocklist: [] };
 let TEMPLATES = { active: 0, list: [{ name: 'Default', body: '' }] };
 
-// Stop everything when tab is closed or navigated away
+// Stop everything when tab is CLOSED (not navigated away)
 window.addEventListener('beforeunload', () => {
+  // Only clear isRunning if the tab is actually closing, not just navigating
+  // We detect navigation vs close by checking if the page is being unloaded due to navigation
+  // Use pagehide with persisted=false as a more reliable signal, but beforeunload is fine
+  // The key fix: do NOT set isRunning=false on navigation — only on actual tab close
+  // We can't reliably distinguish, so we just remove this behavior entirely.
+  // The heartbeat and storage listener will handle resuming on the new page.
   if (isAutoApplying) {
     isAutoApplying = false;
     isProcessRunning = false;
-    // Use sendBeacon-style sync write — beforeunload must be synchronous
-    chrome.storage.local.set({ isRunning: false });
-    console.log('Auto Job Apply: Tab closing — stopped.');
+    console.log('Auto Job Apply: Tab unloading — pausing local state.');
+    // Do NOT write isRunning: false — let the new page pick it up from storage
   }
 });
 
@@ -86,7 +91,8 @@ chrome.storage.local.get(['isRunning', 'processedJobIds', 'settings', 'filters',
   if (result.isRunning) {
     console.log('Auto Job Apply: Resuming automation...');
     isAutoApplying = true;
-    startProcess();
+    // Small delay to let the page fully render before starting
+    setTimeout(() => startProcess(), 1500);
   } else {
     // Even if automation is not running, auto-fill login if we land on the login page
     // This handles the case where LinkedIn logs the user out mid-session
@@ -164,10 +170,87 @@ async function startProcess() {
   lastActivityTime = Date.now();
   console.log('ApplyNinja: startProcess triggered');
 
+  const keywords = await getKeywords();
+  const jobLocation = await getJobLocation();
   const currentUrl = window.location.href;
 
+  // Check if logged in — only redirect if we're NOT on a login/auth page already
+  if (!currentUrl.includes('linkedin.com/login') && !currentUrl.includes('linkedin.com/checkpoint') && !currentUrl.includes('linkedin.com/uas/login')) {
+    const signInBtn =
+      document.querySelector('a.nav__button-secondary[href*="login"]') ||
+      document.querySelector('a[data-tracking-control-name*="guest_homepage"][href*="login"]') ||
+      Array.from(document.querySelectorAll('a, button')).find((el) => {
+        const t = (el.innerText || '').trim().toLowerCase();
+        return t === 'sign in' && el.offsetParent !== null;
+      });
+    if (signInBtn) {
+      console.log('ApplyNinja: Not logged in. Clicking Sign in button...');
+      if (signInBtn.tagName === 'A' && signInBtn.href) {
+        window.location.href = signInBtn.href;
+      } else {
+        signInBtn.click();
+      }
+      isProcessRunning = false;
+      return;
+    }
+  }
+
+  // --- Detect "Sign in to view more jobs" modal and redirect to login ---
+  const signInModal = document.querySelector('[data-test-modal]') || document.querySelector('.artdeco-modal') || document.querySelector('[role="dialog"]');
+  if (signInModal) {
+    const modalText = (signInModal.innerText || '').toLowerCase();
+    if (modalText.includes('sign in') || modalText.includes('join now') || modalText.includes('continue with')) {
+      console.log('Auto Job Apply: Sign-in modal detected. Redirecting to login...');
+      isProcessRunning = false;
+      window.location.href = 'https://www.linkedin.com/login';
+      return;
+    }
+  }
+  // Also check for inline sign-in prompts on the page itself
+  const pageText = document.body.innerText;
+  if (currentUrl.includes('linkedin.com/jobs') && (pageText.includes('Sign in to see') || pageText.includes('Sign in to apply') || pageText.includes('Join now to see'))) {
+    const hasJobCards = !!document.querySelector('.job-card-container, .jobs-search-results-list__item');
+    if (!hasJobCards) {
+      console.log('Auto Job Apply: Not logged in on jobs page. Redirecting to login...');
+      isProcessRunning = false;
+      window.location.href = 'https://www.linkedin.com/login';
+      return;
+    }
+  }
+
   // --- Handle LinkedIn login/checkpoint pages ---
-  // Check for "Welcome Back" / account picker FIRST (it's also under /checkpoint)
+  // "Welcome back" account picker — session cookie is still valid, just navigate directly
+  const isWelcomeBackPage = currentUrl.includes('linkedin.com/login') && document.body.innerText.includes('Welcome back');
+  if (isWelcomeBackPage) {
+    console.log('Auto Job Apply: "Welcome back" page detected. Trying to click saved account...');
+    // The account card is a div[role="button"] containing the profile photo/figure and name
+    const accountCardBtn = Array.from(document.querySelectorAll('div[role="button"][tabindex="0"]')).find((el) => {
+      return el.querySelector('img[src*="licdn.com"]') || el.querySelector('figure');
+    });
+    if (accountCardBtn) {
+      console.log('Auto Job Apply: Clicking saved account card...');
+      accountCardBtn.click();
+      isProcessRunning = false;
+      await wait(4000);
+      startProcess();
+      return;
+    }
+    // Fallback: "Sign in using another account" link
+    const signInOtherLink = Array.from(document.querySelectorAll('a')).find((a) => (a.innerText || '').toLowerCase().includes('sign in using another account'));
+    if (signInOtherLink) {
+      console.log('Auto Job Apply: Clicking "Sign in using another account"...');
+      window.location.href = signInOtherLink.href || 'https://www.linkedin.com/login';
+      isProcessRunning = false;
+      return;
+    }
+    // Last resort
+    console.log('Auto Job Apply: Could not find account card, going to login...');
+    window.location.href = 'https://www.linkedin.com/login';
+    isProcessRunning = false;
+    return;
+  }
+
+  // Check for classic account picker (rememberme / memberList)
   const memberBtn = document.querySelector('button.member-profile__details');
   const isAccountPickerPage = !!memberBtn || !!document.querySelector('#rememberme-div') || !!document.querySelector('.memberList-container');
 
@@ -180,10 +263,10 @@ async function startProcess() {
       startProcess();
       return;
     }
-    // Fallback: "Sign in using another account"
-    const signInOther = document.querySelector('button.signin-other-account') || Array.from(document.querySelectorAll('button')).find((b) => (b.innerText || '').includes('Sign in using another account'));
+    const signInOther = document.querySelector('button.signin-other-account') || Array.from(document.querySelectorAll('button, a')).find((b) => (b.innerText || '').toLowerCase().includes('sign in using another account'));
     if (signInOther) {
-      signInOther.click();
+      if (signInOther.tagName === 'A') window.location.href = signInOther.href;
+      else signInOther.click();
       isProcessRunning = false;
       await wait(2000);
       startProcess();
@@ -199,7 +282,8 @@ async function startProcess() {
     if (loggedIn) {
       isProcessRunning = false;
       await wait(4000);
-      startProcess();
+      const searchUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(keywords)}&location=${encodeURIComponent(jobLocation)}&f_AL=true`;
+      window.location.href = searchUrl;
     } else {
       isProcessRunning = false;
     }
@@ -207,10 +291,15 @@ async function startProcess() {
   }
 
   // --- Handle "Welcome Back" account picker page (fallback text check) ---
-  if (document.querySelector('.login__form') === null && (document.body.innerText.includes('Welcome Back') || document.body.innerText.includes('Sign in using another account'))) {
-    const signInOther = Array.from(document.querySelectorAll('button, a')).find((el) => el.innerText.includes('Sign in using another account'));
+  if (document.querySelector('.login__form') === null && (document.body.innerText.includes('Welcome back') || document.body.innerText.includes('Sign in using another account'))) {
+    const signInOther = Array.from(document.querySelectorAll('button, a')).find((el) => (el.innerText || '').toLowerCase().includes('sign in using another account'));
     if (signInOther) {
-      signInOther.click();
+      console.log('Auto Job Apply: Clicking "Sign in using another account"...');
+      if (signInOther.tagName === 'A') {
+        window.location.href = signInOther.href;
+      } else {
+        signInOther.click();
+      }
       isProcessRunning = false;
       await wait(2000);
       startProcess();
@@ -220,7 +309,6 @@ async function startProcess() {
     return;
   }
 
-  const keywords = await getKeywords();
   console.log('Auto Job Apply: Current URL:', currentUrl);
   console.log('Auto Job Apply: Keywords:', keywords);
 
@@ -238,7 +326,7 @@ async function startProcess() {
 
     if (keywords) {
       console.log('Auto Job Apply: Not on Jobs page. Redirecting to jobs page...');
-      goToJobsPage(keywords);
+      goToJobsPage(keywords, jobLocation);
       return;
     } else {
       console.warn('Auto Job Apply: No keywords set. Cannot initiate search.');
@@ -252,6 +340,19 @@ async function startProcess() {
     console.log('Auto Job Apply: Search page detected but keywords mismatch. Initiating search...');
     const searchInited = await initiateSearch(keywords);
     if (searchInited) return;
+  }
+
+  // Check if location in URL matches saved jobLocation — if not, redirect
+  if (jobLocation) {
+    const locEncoded = encodeURIComponent(jobLocation).toLowerCase();
+    const locPlain = jobLocation.toLowerCase().replace(/\s+/g, '%20');
+    const urlLower = currentUrl.toLowerCase();
+    if (!urlLower.includes(`location=${locEncoded}`) && !urlLower.includes(`location=${locPlain}`)) {
+      console.log(`Auto Job Apply: Location mismatch. Redirecting to "${jobLocation}"...`);
+      isProcessRunning = false;
+      goToJobsPage(keywords, jobLocation);
+      return;
+    }
   }
 
   // Ensure Easy Apply filter is active — if not, redirect with f_AL=true
@@ -851,6 +952,7 @@ const PROFILE = {
   linkedIn: 'https://www.linkedin.com/in/jobin-john',
   website: 'https://debugdin-dino.netlify.app/',
   totalYearsOfExperience: '4',
+  totalMonthsOfExperience: '0',
   noticePeriodDays: '60',
   noticePeriodMonths: '2',
   noticePeriodText: '60 days',
@@ -859,6 +961,8 @@ const PROFILE = {
   currentSalary: '360000',
   expectedSalary: '1000000',
   willingToRelocate: true,
+  skills: '',
+  highestEducation: 'bachelor',
 };
 
 // Sync PROFILE from storage whenever it changes
@@ -883,6 +987,7 @@ function syncProfileFromStorage(stored) {
   if (stored.linkedIn) PROFILE.linkedIn = stored.linkedIn;
   if (stored.website) PROFILE.website = stored.website;
   if (stored.totalExp) PROFILE.totalYearsOfExperience = stored.totalExp;
+  if (stored.totalExpMonths !== undefined) PROFILE.totalMonthsOfExperience = stored.totalExpMonths;
   if (stored.noticeDays) {
     PROFILE.noticePeriodDays = stored.noticeDays;
     PROFILE.noticePeriodMonths = String(Math.round(Number(stored.noticeDays) / 30));
@@ -897,6 +1002,33 @@ function syncProfileFromStorage(stored) {
     PROFILE.expectedSalary = String(Math.round(Number(stored.expectedCTC) * 100000));
   }
   if (stored.willingToRelocate !== undefined) PROFILE.willingToRelocate = stored.willingToRelocate;
+  if (stored.skills !== undefined) PROFILE.skills = stored.skills;
+  if (stored.highestEducation !== undefined) PROFILE.highestEducation = stored.highestEducation;
+  // Dynamically update SKILL_EXPERIENCE from profile skills list
+  if (stored.skills) {
+    const totalYears = parseInt(stored.totalExp) || 4;
+    stored.skills
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean)
+      .forEach((skill) => {
+        // Only override if not already set or set to 0
+        if (!SKILL_EXPERIENCE[skill] || SKILL_EXPERIENCE[skill] === 0) {
+          SKILL_EXPERIENCE[skill] = totalYears;
+        }
+      });
+    // Special case: db-related skills use totalExp as well
+    const dbSkills = ['postgresql', 'postgres', 'mysql', 'mongodb', 'sql', 'database', 'databases', 'relational database', 'relational databases'];
+    dbSkills.forEach((s) => {
+      if (stored.skills.toLowerCase().includes(s)) {
+        SKILL_EXPERIENCE[s] = totalYears;
+        SKILL_EXPERIENCE['database'] = totalYears;
+        SKILL_EXPERIENCE['databases'] = totalYears;
+        SKILL_EXPERIENCE['relational database'] = totalYears;
+        SKILL_EXPERIENCE['relational databases'] = totalYears;
+      }
+    });
+  }
 }
 
 // Load profile + settings from storage on init
@@ -964,7 +1096,14 @@ const SKILL_EXPERIENCE = {
   ' ai ': 0,
   tensorflow: 0,
   pytorch: 0,
-  'data science': 0,
+  'large language model': 0,
+  'large language models': 0,
+  llm: 0,
+  'retrieval-augmented generation': 0,
+  rag: 0,
+  'generative ai': 0,
+  'agentic ai': 0,
+  openai: 1,
   'data analysis': 0,
   tableau: 0,
   'power bi': 0,
@@ -1044,7 +1183,7 @@ async function fillVisibleFields(container) {
 
     if (input.type === 'radio' || input.type === 'checkbox') {
       const fieldset = input.closest('fieldset');
-      const fieldsetName = (fieldset?.querySelector('legend')?.innerText || '').toLowerCase();
+      const fieldsetName = (fieldset?.querySelector('legend')?.innerText || input.closest('div[class]')?.querySelector('p, span[class], h3, label')?.innerText || '').toLowerCase();
       const context = fieldsetName + ' ' + combined;
 
       // Work authorization / visa sponsorship
@@ -1166,17 +1305,32 @@ async function fillVisibleFields(container) {
         context.includes('willing') ||
         context.includes('open to')
       ) {
-        if (context.includes('relocate')) {
-          if (PROFILE.willingToRelocate && (labelText.includes('yes') || labelText.includes('willing') || labelText.includes('comfortable'))) input.click();
-          else if (!PROFILE.willingToRelocate && labelText.includes('no')) input.click();
-        } else if (labelText.includes('yes') || labelText.includes('willing') || labelText.includes('comfortable')) {
-          input.click();
-        }
+        const answerYes = context.includes('relocate') || context.includes('commute') || context.includes('comfortable') ? !!PROFILE.willingToRelocate : true;
+        if (answerYes && (labelText.includes('yes') || labelText.includes('willing') || labelText.includes('comfortable'))) input.click();
+        else if (!answerYes && labelText.includes('no')) input.click();
       }
       // Availability / start date
       else if (context.includes('start date') || context.includes('available') || context.includes('join')) {
         if (labelText.includes('immediately') || labelText.includes('15 days') || labelText.includes('30 days') || labelText.includes('available')) {
           input.click();
+        }
+      }
+      // Education / degree questions
+      else if (context.includes('bachelor') || context.includes('degree') || context.includes('education') || context.includes('graduate')) {
+        const edu = (PROFILE.highestEducation || 'bachelor').toLowerCase();
+        const hasBachelor = edu === 'bachelor' || edu === 'master' || edu === 'phd';
+        const hasMaster = edu === 'master' || edu === 'phd';
+        const hasPhd = edu === 'phd';
+        if (context.includes('phd') || context.includes('doctorate')) {
+          if (hasPhd && labelText.includes('yes')) input.click();
+          else if (!hasPhd && labelText.includes('no')) input.click();
+        } else if (context.includes('master') || context.includes('postgraduate')) {
+          if (hasMaster && labelText.includes('yes')) input.click();
+          else if (!hasMaster && labelText.includes('no')) input.click();
+        } else {
+          // bachelor or general degree question
+          if (hasBachelor && labelText.includes('yes')) input.click();
+          else if (!hasBachelor && labelText.includes('no')) input.click();
         }
       }
       // General yes/no consent, agreements
@@ -1238,9 +1392,10 @@ async function fillVisibleFields(container) {
           Array.from(input.options).find((o) => o.value && !o.disabled && o.value !== '');
         if (noticeOption) setValue(input, noticeOption.value);
       } else if (combined.includes('additional months') || combined.includes('months of experience') || (combined.includes('month') && combined.includes('experience') && !combined.includes('year'))) {
-        // "total additional months of experience" — pick 0 since we count in full years
-        const zeroOption = Array.from(input.options).find((o) => o.text.trim() === '0' || o.value === '0') || Array.from(input.options).find((o) => o.value && !o.disabled);
-        if (zeroOption) setValue(input, zeroOption.value);
+        // "total additional months of experience" — use profile value
+        const targetMonths = parseInt(PROFILE.totalMonthsOfExperience) || 0;
+        const monthOption = Array.from(input.options).find((o) => parseInt(o.value) === targetMonths || parseInt(o.text) === targetMonths) || Array.from(input.options).find((o) => o.text.trim() === '0' || o.value === '0') || Array.from(input.options).find((o) => o.value && !o.disabled);
+        if (monthOption) setValue(input, monthOption.value);
       } else if (combined.includes('total years') || combined.includes('years of experience') || combined.includes('years of professional') || combined.includes('experience') || combined.includes('years') || combined.includes('professional')) {
         // Check if label mentions a specific skill
         const skillExp = getSkillExperience(combined);
@@ -1315,7 +1470,7 @@ async function fillVisibleFields(container) {
         } else {
           // It's asking about state management experience — fill years
           const skillExp = getSkillExperience(combined);
-          setValue(input, skillExp !== null ? String(skillExp) : PROFILE.totalYearsOfExperience);
+          setValue(input, skillExp !== null ? String(skillExp) : '0');
         }
       } else if (combined.includes('country')) {
         setValue(input, PROFILE.country);
@@ -1336,10 +1491,12 @@ async function fillVisibleFields(container) {
         combined.includes('current annual salary') ||
         combined.includes('current annual compensation') ||
         combined.includes('current compensation') ||
-        combined.includes('current package')
+        combined.includes('current package') ||
+        combined.includes('current in-hand') ||
+        combined.includes('current in hand') ||
+        (combined.includes('current') && combined.includes('in-hand')) ||
+        (combined.includes('current') && combined.includes('in hand'))
       ) {
-        // Use full rupee value if field expects a large number (>= 5 digits implied),
-        // otherwise use LPA shorthand. Heuristic: if placeholder/label mentions "lpa" use LPA, else full.
         const wantsLPA = combined.includes('lpa') || combined.includes('lakhs') || combined.includes('lac');
         setValue(input, wantsLPA ? PROFILE.currentCTC : PROFILE.currentSalary);
       } else if (
@@ -1350,7 +1507,11 @@ async function fillVisibleFields(container) {
         combined.includes('expected annual compensation') ||
         combined.includes('desired salary') ||
         combined.includes('expected compensation') ||
-        combined.includes('expected package')
+        combined.includes('expected package') ||
+        combined.includes('expected in-hand') ||
+        combined.includes('expected in hand') ||
+        (combined.includes('expected') && combined.includes('in-hand')) ||
+        (combined.includes('expected') && combined.includes('in hand'))
       ) {
         const wantsLPA = combined.includes('lpa') || combined.includes('lakhs') || combined.includes('lac');
         setValue(input, wantsLPA ? PROFILE.expectedCTC : PROFILE.expectedSalary);
@@ -1402,13 +1563,18 @@ async function fillVisibleFields(container) {
         // Check if field expects out of 5
         const outOf5 = combined.includes('out of 5') || combined.includes('/5') || (input.max && Number(input.max) <= 5);
         setValue(input, outOf5 ? String(Math.round(rating / 2)) : String(rating) + '.0');
-      } else if (combined.includes('experience') || combined.includes('years') || combined.includes('how many') || combined.includes('relevant')) {
+      } else if (combined.includes('experience') || combined.includes('years') || combined.includes('how many') || combined.includes('relevant') || combined.includes('expertise')) {
         // Fill years of experience — skill-aware
         const skillExp = getSkillExperience(combined);
         if (skillExp !== null) {
+          // Known skill — use its specific experience value (could be 0)
           setValue(input, String(skillExp));
-        } else {
+        } else if (combined.includes('total') || combined.includes('overall') || combined.includes('professional') || combined.includes('work experience') || combined.includes('years of experience') || combined.includes('how many years')) {
+          // General total experience question
           setValue(input, PROFILE.totalYearsOfExperience);
+        } else {
+          // Unknown specific skill — default to 0, not total years
+          setValue(input, '0');
         }
       }
     }
@@ -1560,6 +1726,14 @@ function shouldAnswerYes(text) {
     return true;
   }
 
+  // Education / degree
+  if (t.includes('bachelor') || t.includes('degree') || (t.includes('education') && (t.includes('level') || t.includes('completed')))) {
+    const edu = (PROFILE.highestEducation || 'bachelor').toLowerCase();
+    if (t.includes('phd') || t.includes('doctorate')) return edu === 'phd';
+    if (t.includes('master') || t.includes('postgraduate')) return edu === 'master' || edu === 'phd';
+    return edu === 'bachelor' || edu === 'master' || edu === 'phd';
+  }
+
   // Default: Yes (safe for most unknown questions)
   return true;
 }
@@ -1672,9 +1846,17 @@ function getKeywords() {
   });
 }
 
-function goToJobsPage(keywords) {
-  // f_AL=true filters for Easy Apply jobs only
-  const searchUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(keywords)}&f_AL=true`;
+function getJobLocation() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(['resume'], (result) => {
+      resolve(result.resume?.jobLocation || 'India');
+    });
+  });
+}
+
+function goToJobsPage(keywords, location) {
+  const loc = location || 'India';
+  const searchUrl = `https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(keywords)}&location=${encodeURIComponent(loc)}&f_AL=true`;
   window.location.href = searchUrl;
 }
 
@@ -1746,6 +1928,39 @@ async function attemptLogin() {
     return false;
   }
 
+  // Handle "Welcome back" account picker — click the saved account card (div[role="button"] with profile image)
+  if (document.body.innerText.includes('Welcome back')) {
+    console.log('Auto Job Apply: "Welcome back" detected. Clicking account card...');
+    const accountCardBtn = Array.from(document.querySelectorAll('div[role="button"][tabindex="0"]')).find((el) => {
+      return el.querySelector('img[src*="licdn.com"]') || el.querySelector('figure');
+    });
+    if (accountCardBtn) {
+      accountCardBtn.click();
+      return true;
+    }
+    // Fallback: "Sign in using another account" link
+    const signInOtherLink = Array.from(document.querySelectorAll('a')).find((a) => (a.innerText || '').toLowerCase().includes('sign in using another account'));
+    if (signInOtherLink) {
+      window.location.href = signInOtherLink.href || 'https://www.linkedin.com/login';
+      return true;
+    }
+    return false;
+  }
+
+  // Handle account picker
+  if (document.querySelector('.login__form') === null && document.body.innerText.includes('Sign in using another account')) {
+    const signInOther = Array.from(document.querySelectorAll('button, a')).find((el) => (el.innerText || '').toLowerCase().includes('sign in using another account'));
+    if (signInOther) {
+      console.log('Auto Job Apply: Clicking "Sign in using another account"...');
+      if (signInOther.tagName === 'A') {
+        window.location.href = signInOther.href;
+      } else {
+        signInOther.click();
+      }
+      return true;
+    }
+  }
+
   // Handle account picker ("Welcome Back") — click the saved account button
   const memberBtn = document.querySelector('button.member-profile__details');
   if (memberBtn) {
@@ -1756,6 +1971,7 @@ async function attemptLogin() {
 
   // LinkedIn new UI uses dynamic class names — find by autocomplete attribute or label text
   const emailField =
+    document.querySelector('input[name="session_key"]') ||
     document.querySelector('input[autocomplete="webauthn"]') ||
     document.querySelector('input[autocomplete="username"]') ||
     document.querySelector('#username') ||
@@ -1764,11 +1980,12 @@ async function attemptLogin() {
       return label && (label.innerText.toLowerCase().includes('email') || label.innerText.toLowerCase().includes('phone'));
     });
 
-  const passwordField = document.querySelector('input[autocomplete="current-password"]') || document.querySelector('#password') || document.querySelector('input[type="password"]');
+  const passwordField = document.querySelector('input[name="session_password"]') || document.querySelector('input[autocomplete="current-password"]') || document.querySelector('#password') || document.querySelector('input[type="password"]');
 
   // Submit button — LinkedIn new UI uses type="button" not type="submit"
   const submitBtn =
     document.querySelector('button[type="submit"]') ||
+    document.querySelector('button[data-tracking-control-name="guest_page__form__form__submit"]') ||
     Array.from(document.querySelectorAll('button[type="button"]')).find((b) => {
       const t = (b.innerText || b.textContent || '').trim().toLowerCase();
       return t === 'sign in';

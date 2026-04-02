@@ -8,6 +8,7 @@ const entry = process.env.ENTRY;
 const contentScriptConfig = defineConfig({
   build: {
     emptyOutDir: false,
+    minify: false,
     lib: {
       entry: resolve(__dirname, `src/${entry || 'content-script'}.js`),
       name: 'ApplyNinja',

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ApplyNinja",
-  "version": "2.0.0",
-  "description": "Stealthy job automation for LinkedIn, Naukri, Indeed & Glassdoor.",
+  "version": "1.0.0",
+  "description": "Stealthy job automation for LinkedIn & Glassdoor.",
   "permissions": ["storage", "tabs", "activeTab", "scripting"],
   "host_permissions": ["https://www.linkedin.com/*", "https://www.glassdoor.com/*", "https://www.glassdoor.co.in/*"],
   "action": {

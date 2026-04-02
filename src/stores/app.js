@@ -3,7 +3,7 @@ import { reactive, ref } from 'vue';
 
 export const useAppStore = defineStore('app', () => {
   const user = reactive({ email: '', password: '' });
-  const resume = reactive({ keywords: '', summary: '' });
+  const resume = reactive({ keywords: '', summary: '', jobLocation: 'India' });
 
   const profile = reactive({
     firstName: '',
@@ -16,15 +16,18 @@ export const useAppStore = defineStore('app', () => {
     linkedIn: '',
     website: '',
     totalExp: '0',
+    totalExpMonths: '0',
     noticeDays: '30',
     currentCTC: '0',
     expectedCTC: '0',
     willingToRelocate: true,
+    skills: '',
+    highestEducation: 'bachelor',
   });
 
   const settings = reactive({
     delayBetweenApps: 3,
-    dailyLimit: 50,
+    dailyLimit: 40,
     platforms: {
       linkedin: true,
       naukri: false,
@@ -85,13 +88,14 @@ export const useAppStore = defineStore('app', () => {
         if (result.resume) {
           resume.keywords = result.resume.keywords || '';
           resume.summary = result.resume.summary || '';
+          resume.jobLocation = result.resume.jobLocation || 'India';
         }
         if (result.profile) Object.assign(profile, result.profile);
         if (result.settings) {
           Object.assign(settings, result.settings);
           // ensure platforms object exists for older installs
           if (!settings.platforms) settings.platforms = { linkedin: true, naukri: false, indeed: false, glassdoor: false };
-          if (settings.dailyLimit === undefined) settings.dailyLimit = 50;
+          if (settings.dailyLimit === undefined) settings.dailyLimit = 40;
         }
         if (result.filters) Object.assign(filters, result.filters);
         if (result.templates) Object.assign(templates, result.templates);
@@ -119,7 +123,7 @@ export const useAppStore = defineStore('app', () => {
       storage.set(
         {
           user: { email: user.email, password: user.password },
-          resume: { keywords: resume.keywords, summary: resume.summary },
+          resume: { keywords: resume.keywords, summary: resume.summary, jobLocation: resume.jobLocation },
           profile: { ...profile },
           settings: { ...settings, platforms: { ...settings.platforms } },
           filters: { companyBlacklist: [...filters.companyBlacklist], titleBlocklist: [...filters.titleBlocklist] },

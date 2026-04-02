@@ -59,19 +59,22 @@ div(class="root-wrap")
       div(class="card")
         label(class="field-label block mb-1") Job Keywords
         input(v-model="store.resume.keywords", type="text", placeholder="Frontend Developer, Vue.js...", class="field-input")
+        div(class="mt-2")
+          label(class="field-label block mb-1") Job Location
+          input(v-model="store.resume.jobLocation", type="text", placeholder="India", class="field-input")
 
     //- ── PLATFORMS ──
     div(v-if="activeTab === 'platforms'", class="section-gap")
       div(class="card")
         p(class="section-title") Active Platforms
         p(class="hint-text mb-3") Enable the job boards you want ApplyNinja to run on. Make sure you're logged in on each site.
-        div(v-for="p in platformList", class="platform-row", :key="p.key")
+        div(v-for="p in platformList", class="platform-row", :key="p.key", :class="{ disabled: p.disabled }")
           div(class="platform-info")
             span(class="platform-icon") {{ p.icon }}
             div
-              span(class="platform-name") {{ p.name }}
+              span(class="platform-name") {{ p.name }} {{ p.disabled ? '(Coming Soon)' : '' }}
               span(class="platform-url") {{ p.url }}
-          button(class="toggle", @click="togglePlatform(p.key)", :class="{ on: store.settings.platforms[p.key] }")
+          button(class="toggle", @click="p.disabled ? null : togglePlatform(p.key)", :disabled="p.disabled", :class="{ on: store.settings.platforms[p.key] }")
             span(class="toggle-thumb")
 
       div(class="card")
@@ -80,10 +83,10 @@ div(class="root-wrap")
         div(class="card-row")
           span(class="field-label") Max applications / day
           span(class="accent-text") {{ store.settings.dailyLimit }}
-        input(v-model.number="store.settings.dailyLimit", type="range", step="5", min="5", max="200", class="slider", @change="store.saveData()")
+        input(v-model.number="store.settings.dailyLimit", type="range", step="5", min="5", max="40", class="slider", @change="store.saveData()")
         div(class="slider-labels")
           span 5
-          span 200
+          span 40
 
     //- ── FILTERS ──
     div(v-if="activeTab === 'filters'", class="section-gap")
@@ -91,14 +94,14 @@ div(class="root-wrap")
       div(class="card")
         p(class="section-title") Company Blacklist
         p(class="hint-text mb-2") Skip jobs from these companies. One per line.
-        textarea(rows="5", placeholder="TCS\nWipro\nInfosys", class="field-input resize-none", @input="updateBlacklist($event.target.value)", :value="store.filters.companyBlacklist.join('\\n')")
+        textarea(rows="5", placeholder="TCS\nWipro\nInfosys", class="field-input resize-none", @keydown.enter.prevent="insertNewline($event, updateBlacklist)", @input="updateBlacklist($event.target.value)", :value="store.filters.companyBlacklist.join('\\n')")
         p(class="hint-text mt-1") {{ store.filters.companyBlacklist.length }} companies blocked
 
       //- Title blocklist
       div(class="card")
         p(class="section-title") Title Keyword Blocklist
         p(class="hint-text mb-2") Skip jobs whose title contains these words. One per line.
-        textarea(rows="5", placeholder="Senior\nLead\nManager\n10+ years", class="field-input resize-none", @input="updateTitleBlocklist($event.target.value)", :value="store.filters.titleBlocklist.join('\\n')")
+        textarea(rows="5", placeholder="Senior\nLead\nManager\n10+ years", class="field-input resize-none", @keydown.enter.prevent="insertNewline($event, updateTitleBlocklist)", @input="updateTitleBlocklist($event.target.value)", :value="store.filters.titleBlocklist.join('\\n')")
         p(class="hint-text mt-1") {{ store.filters.titleBlocklist.length }} keywords blocked
 
       button(class="btn-primary", @click="saveFilters") {{ filtersSaved ? 'Saved ✓' : 'Save Filters' }}
@@ -139,8 +142,31 @@ div(class="root-wrap")
             label(class="field-label block mb-1") Experience (yrs)
             input(v-model="store.profile.totalExp", type="number", min="0", class="field-input")
           div
+            label(class="field-label block mb-1") Experience (months)
+            input(
+              v-model="store.profile.totalExpMonths",
+              type="number",
+              min="0",
+              max="11",
+              class="field-input",
+              @input="store.profile.totalExpMonths = Math.min(11, Math.max(0, parseInt($event.target.value) || 0)).toString()",
+              @blur="store.profile.totalExpMonths = Math.min(11, Math.max(0, parseInt(store.profile.totalExpMonths) || 0)).toString()"
+            )
+        div(class="grid-2 mt-2")
+          div
             label(class="field-label block mb-1") Notice (days)
             input(v-model="store.profile.noticeDays", type="number", min="0", class="field-input")
+          div
+            label(class="field-label block mb-1") Highest Education
+            select(v-model="store.profile.highestEducation", class="field-input")
+              option(value="bachelor") Bachelor's Degree
+              option(value="master") Master's Degree
+              option(value="phd") PhD
+              option(value="diploma") Diploma
+              option(value="highschool") High School
+        div(class="mt-2")
+          label(class="field-label block mb-1") Skills (comma separated)
+          textarea(v-model="store.profile.skills", rows="3", placeholder="Vue.js, Node.js, PostgreSQL, JavaScript...", class="field-input resize-none")
         div(class="grid-2 mt-2")
           div
             label(class="field-label block mb-1") Current CTC (LPA)
@@ -253,7 +279,7 @@ const tabs = [
 
 const platformList = [
   { key: 'linkedin', name: 'LinkedIn', url: 'linkedin.com', icon: '💼' },
-  { key: 'glassdoor', name: 'Glassdoor', url: 'glassdoor.com', icon: '🚪' },
+  { key: 'glassdoor', name: 'Glassdoor', url: 'glassdoor.com', icon: '🚪', disabled: true },
 ];
 
 const pauseOptions = [
@@ -349,7 +375,10 @@ const toggleApplication = async () => {
 };
 
 const togglePlatform = async (key) => {
-  store.settings.platforms[key] = !store.settings.platforms[key];
+  // Radio behavior: only one platform active at a time
+  Object.keys(store.settings.platforms).forEach((k) => {
+    store.settings.platforms[k] = k === key;
+  });
   await store.saveData();
 };
 
@@ -406,17 +435,32 @@ const clearAll = async () => {
   showToast('History cleared', 'info');
 };
 
-const updateBlacklist = (val) => {
+const updateBlacklist = async (val) => {
   store.filters.companyBlacklist = val
     .split('\n')
     .map((s) => s.trim())
     .filter(Boolean);
+  await store.saveData();
 };
-const updateTitleBlocklist = (val) => {
+const updateTitleBlocklist = async (val) => {
   store.filters.titleBlocklist = val
     .split('\n')
     .map((s) => s.trim())
     .filter(Boolean);
+  await store.saveData();
+};
+
+const insertNewline = (e, updateFn) => {
+  const el = e.target;
+  const start = el.selectionStart;
+  const end = el.selectionEnd;
+  const val = el.value;
+  const newVal = val.slice(0, start) + '\n' + val.slice(end);
+  el.value = newVal;
+  el.selectionStart = el.selectionEnd = start + 1;
+  updateFn(newVal);
+  // Trigger input event so Vue picks up the change
+  el.dispatchEvent(new Event('input', { bubbles: true }));
 };
 
 const parseAndFill = async () => {
@@ -443,6 +487,7 @@ const parseAndFill = async () => {
     if (parsed.expectedCTC) store.profile.expectedCTC = parsed.expectedCTC;
     if (parsed.email) store.user.email = parsed.email;
     if (parsed.summary) store.resume.summary = parsed.summary;
+    if (parsed.skills) store.profile.skills = parsed.skills;
     await store.saveData();
     showToast('Profile updated from resume', 'info');
     activeTab.value = 'profile';
@@ -487,7 +532,7 @@ onUnmounted(() => {
 });
 
 watch(
-  () => [store.resume.keywords, store.resume.summary],
+  () => [store.resume.keywords, store.resume.summary, store.resume.jobLocation],
   async () => {
     if (store.isLoaded) await store.saveData();
   },
@@ -951,6 +996,10 @@ watch(
   justify-content: space-between;
   padding: 9px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.platform-row.disabled {
+  opacity: 0.5;
+  pointer-events: none;
 }
 .platform-row:last-child {
   border-bottom: none;
