@@ -251,11 +251,17 @@ div(class="root-wrap")
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue';
 import { useAppStore } from '../stores/app';
 import { parseResume } from '../utils/resumeParser';
+import { trackPageView, trackStartApplying, trackStopApplying, trackPauseApplying } from '../utils/google-analytics';
 
 const store = useAppStore();
 
 // UI state
 const activeTab = ref('dashboard');
+
+watch(activeTab, (newTab) => {
+  const label = tabs.find((t) => t.id === newTab)?.label || newTab;
+  trackPageView(newTab, label);
+});
 const toasts = ref([]);
 const isSaved = ref(false);
 const profileSaved = ref(false);
@@ -368,6 +374,11 @@ const toggleApplication = async () => {
   }
   store.isRunning = !store.isRunning;
   store.pauseUntil = null;
+  if (store.isRunning) {
+    trackStartApplying(store.resume.keywords, store.resume.jobLocation || 'India');
+  } else {
+    trackStopApplying(store.stats.appliedToday);
+  }
   await store.saveData();
   if (typeof chrome !== 'undefined' && chrome.runtime) {
     chrome.runtime.sendMessage({ action: store.isRunning ? 'start' : 'stop' });
@@ -390,6 +401,7 @@ const pauseFor = async (ms) => {
     if (typeof chrome !== 'undefined' && chrome.runtime) chrome.runtime.sendMessage({ action: 'stop' });
   }
   await store.saveData();
+  trackPauseApplying(ms);
   showToast(`Paused for ${Math.round(ms / 60000)} min`, 'info');
 };
 

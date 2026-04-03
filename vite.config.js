@@ -6,6 +6,9 @@ import { resolve } from 'path';
 const entry = process.env.ENTRY;
 
 const contentScriptConfig = defineConfig({
+  define: {
+    'import.meta.env.VITE_GA_API_SECRET': JSON.stringify(process.env.VITE_GA_API_SECRET || ''),
+  },
   build: {
     emptyOutDir: false,
     minify: false,

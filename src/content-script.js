@@ -50,6 +50,7 @@ window.ApplyNinjaDebug = {
 console.log('ApplyNinja: Debug helper available at window.ApplyNinjaDebug');
 
 import { isCompanyBlacklisted, isTitleBlocked, isDailyLimitReached, isPaused, recordApplication as sharedRecordApplication, recordSkip as sharedRecordSkip, buildCoverLetter } from './utils/platform.js';
+import { trackApplicationSubmitted, trackJobSkipped, trackDailyLimitReached, trackFilterBlocked, trackLoginDetected } from './utils/google-analytics.js';
 
 let isAutoApplying = false;
 let isProcessRunning = false;
@@ -160,6 +161,7 @@ async function startProcess() {
   // Check daily limit
   if (await isDailyLimitReached()) {
     console.log('ApplyNinja: Daily limit reached. Stopping.');
+    trackDailyLimitReached(0);
     chrome.storage.local.set({ isRunning: false });
     isAutoApplying = false;
     isProcessRunning = false;
@@ -559,11 +561,13 @@ async function markCurrentJobAsProcessed() {
 
 async function recordApplication(jobId, title, company) {
   await sharedRecordApplication(jobId, title, company, 'linkedin');
+  trackApplicationSubmitted(title, company, 'linkedin');
   console.log(`ApplyNinja: Recorded application — ${title} @ ${company}`);
 }
 
 async function recordSkip() {
   await sharedRecordSkip();
+  trackJobSkipped('general');
 }
 
 function isCurrentJobAlreadyApplied() {
@@ -666,6 +670,7 @@ async function selectNextJobCard() {
       console.log(`ApplyNinja: Blacklisted company "${companyName}", skipping.`);
       if (jobId) processedJobIds.add(jobId);
       else if (title) processedJobIds.add(title);
+      trackFilterBlocked('company', companyName);
       await sharedRecordSkip();
       continue;
     }
@@ -673,6 +678,7 @@ async function selectNextJobCard() {
       console.log(`ApplyNinja: Blocked title "${title}", skipping.`);
       if (jobId) processedJobIds.add(jobId);
       else if (title) processedJobIds.add(title);
+      trackFilterBlocked('title', title);
       await sharedRecordSkip();
       continue;
     }
@@ -1177,13 +1183,29 @@ async function fillVisibleFields(container) {
     // Skip already-filled non-toggle inputs (but not selects stuck on placeholder)
     const isSelectPlaceholder = input.tagName === 'SELECT' && (!input.value || input.value === '' || input.options[input.selectedIndex]?.text?.toLowerCase().includes('select an option') || input.options[input.selectedIndex]?.text?.toLowerCase().includes('select'));
     if (input.type === 'file') return; // never touch file inputs
-    if (input.value && input.value !== '' && input.type !== 'radio' && input.type !== 'checkbox' && !isSelectPlaceholder) return;
+    // Skip already-filled inputs, but re-fill number inputs with value '0' (LinkedIn default)
+    const hasValue = input.value && input.value !== '';
+    const isZeroNumber = input.type === 'number' && input.value === '0';
+    const isEmptyLikeValue = input.value === '0' || input.value === '0.0';
+    if (hasValue && !isZeroNumber && !isEmptyLikeValue && input.type !== 'radio' && input.type !== 'checkbox' && !isSelectPlaceholder) return;
 
     console.log(`Auto Job Apply: Field: "${combined.trim()}" (Type: ${input.type})`);
 
     if (input.type === 'radio' || input.type === 'checkbox') {
       const fieldset = input.closest('fieldset');
-      const fieldsetName = (fieldset?.querySelector('legend')?.innerText || input.closest('div[class]')?.querySelector('p, span[class], h3, label')?.innerText || '').toLowerCase();
+      const legendText = fieldset?.querySelector('legend')?.innerText || '';
+      // Walk up DOM to find the question text (LinkedIn puts it in a <p> or <span> above the radio group)
+      let questionText = '';
+      let el = input.parentElement;
+      for (let i = 0; i < 6 && el; i++) {
+        const p = el.querySelector('p, legend, h3, [class*="label"], [class*="question"]');
+        if (p && p.innerText && p.innerText.trim().length > 5 && !['yes', 'no'].includes(p.innerText.trim().toLowerCase())) {
+          questionText = p.innerText.trim();
+          break;
+        }
+        el = el.parentElement;
+      }
+      const fieldsetName = (legendText || questionText).toLowerCase();
       const context = fieldsetName + ' ' + combined;
 
       // Work authorization / visa sponsorship
@@ -1290,7 +1312,7 @@ async function fillVisibleFields(container) {
           input.click();
         }
       }
-      // Willing to work on-site / relocate / commute / shifts / WFO
+      // Willing to work on-site / relocate / commute / shifts / WFO / hybrid
       else if (
         context.includes('relocate') ||
         context.includes('on-site') ||
@@ -1301,11 +1323,12 @@ async function fillVisibleFields(container) {
         context.includes('monday to friday') ||
         context.includes('wfo') ||
         context.includes('work from office') ||
+        context.includes('hybrid') ||
         context.includes('comfortable') ||
         context.includes('willing') ||
         context.includes('open to')
       ) {
-        const answerYes = context.includes('relocate') || context.includes('commute') || context.includes('comfortable') ? !!PROFILE.willingToRelocate : true;
+        const answerYes = context.includes('relocate') || context.includes('commute') || context.includes('comfortable') || context.includes('hybrid') ? !!PROFILE.willingToRelocate : true;
         if (answerYes && (labelText.includes('yes') || labelText.includes('willing') || labelText.includes('comfortable'))) input.click();
         else if (!answerYes && labelText.includes('no')) input.click();
       }
@@ -1462,6 +1485,9 @@ async function fillVisibleFields(container) {
         setValue(input, PROFILE.pincode);
       } else if (combined.includes('city')) {
         // City fields are often typeahead — type the value and wait for autocomplete suggestion
+        // Mark as filled to prevent duplicate calls
+        if (input.dataset.applyNinjaFilled) return;
+        input.dataset.applyNinjaFilled = '1';
         typeAndSelectSuggestion(input, PROFILE.city);
       } else if (combined.includes('state') || combined.includes('province')) {
         // Only fill state/province if it's NOT asking about state management libraries
@@ -1474,7 +1500,7 @@ async function fillVisibleFields(container) {
         }
       } else if (combined.includes('country')) {
         setValue(input, PROFILE.country);
-      } else if (combined.includes('notice') || combined.includes('serving notice') || combined.includes('joining period') || combined.includes('available from') || combined.includes('availability')) {
+      } else if (combined.includes('notice') || combined.includes('serving notice') || combined.includes('joining period') || combined.includes('available from') || combined.includes('availability') || combined.includes('days left')) {
         if (combined.includes('month')) {
           setValue(input, PROFILE.noticePeriodMonths);
         } else if (combined.includes('day') || input.type === 'number') {
@@ -1502,6 +1528,8 @@ async function fillVisibleFields(container) {
       } else if (
         combined.includes('expected ctc') ||
         combined.includes('expected annual ctc') ||
+        combined.includes('ectc') ||
+        combined.includes('e ctc') ||
         combined.includes('expected salary') ||
         combined.includes('expected annual salary') ||
         combined.includes('expected annual compensation') ||
@@ -1776,7 +1804,9 @@ async function typeAndSelectSuggestion(input, value, isFallback = false) {
   await wait(300);
 
   const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+  // Always clear first to prevent appending
   if (nativeSetter) nativeSetter.call(input, '');
+  else input.value = '';
   input.dispatchEvent(new Event('input', { bubbles: true }));
   await wait(150);
 
@@ -1997,6 +2027,7 @@ async function attemptLogin() {
   }
 
   console.log('Auto Job Apply: Filling login form via simulated typing...');
+  trackLoginDetected();
   await typeIntoField(emailField, email);
   await wait(700);
   await typeIntoField(passwordField, password);
